@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y \
             WORKDIR /app
 
             # Copy backend source code
+            COPY config.yaml ./config.yaml
             COPY backend ./backend
 
             # Install dependencies (no cache mount for Railway compatibility)
