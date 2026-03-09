@@ -14,7 +14,7 @@ RUN apt-get update && apt-get install -y \
             # Set working directory
             WORKDIR /app
 
-            # Copy frontend source code
+            # Copy backend source code
             COPY backend ./backend
 
             # Install dependencies (no cache mount for Railway compatibility)
@@ -23,5 +23,5 @@ RUN apt-get update && apt-get install -y \
             # Expose ports (gateway: 8001, langgraph: 2024)
             EXPOSE 8001 2024
 
-            # Default command (can be overridden in docker-compose)
-            CMD ["sh", "-c", "uv run uvicorn src.gateway.app:app --host 0.0.0.0 --port 8001"]
+            # Default command - run from backend directory
+            CMD ["sh", "-c", "cd backend && uv run uvicorn src.gateway.app:app --host 0.0.0.0 --port 8001"]
