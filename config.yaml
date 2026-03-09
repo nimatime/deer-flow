@@ -10,29 +10,19 @@ models:
     max_tokens: 8192
     supports_vision: true
     when_thinking_enabled:
-      extra_body:
-        thinking:
-          type: enabled
+      thinking:
+        type: enabled
 
-# Tool Groups Configuration
-tool_groups:
-  - name: web
-  - name: file:read
-  - name: file:write
-  - name: bash
-
-# Tools Configuration
 tools:
-  web:
-    - name: web_search
-      description: Search the web using Tavily
-    - name: crawl_web
-      description: Crawl and extract content from web pages
+  - name: web_search
+    group: web
+    use: src.community.tavily.tools:web_search_tool
+    max_results: 5
 
-# Default LLM settings
-default_model: claude-sonnet
+  - name: web_fetch
+    group: web
+    use: src.community.jina_ai.tools:web_fetch_tool
+    timeout: 10
 
-# Search Configuration
-search:
-  provider: tavily
-  api_key: $TAVILY_API_KEY
+sandbox:
+  use: src.sandbox.local:LocalSandboxProvider
