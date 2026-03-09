@@ -17,6 +17,7 @@ RUN apt-get update && apt-get install -y \
             # Copy backend source code
             COPY config.yaml ./config.yaml
             COPY backend ./backend
+            COPY skills ./skills
 
             # Install dependencies (no cache mount for Railway compatibility)
             RUN cd backend && uv sync
