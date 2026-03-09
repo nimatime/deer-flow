@@ -2,7 +2,10 @@ import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+import httpx
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response, StreamingResponse
 
 from src.config.app_config import get_app_config
 from src.gateway.config import get_gateway_config
@@ -27,12 +30,12 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+LANGGRAPH_URL = "http://localhost:2024"
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan handler."""
-
-    # Load config and check necessary environment variables at startup
     try:
         get_app_config()
         logger.info("Configuration loaded successfully")
@@ -43,15 +46,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     config = get_gateway_config()
     logger.info(f"Starting API Gateway on {config.host}:{config.port}")
 
-    # NOTE: MCP tools initialization is NOT done here because:
-    # 1. Gateway doesn't use MCP tools - they are used by Agents in the LangGraph Server
-    # 2. Gateway and LangGraph Server are separate processes with independent caches
-    # MCP tools are lazily initialized in LangGraph Server when first needed
-
-    # Start IM channel service if any channels are configured
     try:
         from src.channels.service import start_channel_service
-
         channel_service = await start_channel_service()
         logger.info("Channel service started: %s", channel_service.get_status())
     except Exception:
@@ -59,10 +55,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     yield
 
-    # Stop channel service on shutdown
     try:
         from src.channels.service import stop_channel_service
-
         await stop_channel_service()
     except Exception:
         logger.exception("Failed to stop channel service")
@@ -70,11 +64,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 
 def create_app() -> FastAPI:
-    """Create and configure the FastAPI application.
-
-    Returns:
-        Configured FastAPI application instance.
-    """
+    """Create and configure the FastAPI application."""
 
     app = FastAPI(
         title="DeerFlow API Gateway",
@@ -94,7 +84,7 @@ API Gateway for DeerFlow - A LangGraph-based AI agent backend with sandbox execu
 
 ### Architecture
 
-LangGraph requests are handled by nginx reverse proxy.
+LangGraph requests are proxied to the LangGraph server running on port 2024.
 This gateway provides custom endpoints for models, MCP configuration, skills, and artifacts.
         """,
         version="0.1.0",
@@ -103,87 +93,108 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
         redoc_url="/redoc",
         openapi_url="/openapi.json",
         openapi_tags=[
-            {
-                "name": "models",
-                "description": "Operations for querying available AI models and their configurations",
-            },
-            {
-                "name": "mcp",
-                "description": "Manage Model Context Protocol (MCP) server configurations",
-            },
-            {
-                "name": "memory",
-                "description": "Access and manage global memory data for personalized conversations",
-            },
-            {
-                "name": "skills",
-                "description": "Manage skills and their configurations",
-            },
-            {
-                "name": "artifacts",
-                "description": "Access and download thread artifacts and generated files",
-            },
-            {
-                "name": "uploads",
-                "description": "Upload and manage user files for threads",
-            },
-            {
-                "name": "agents",
-                "description": "Create and manage custom agents with per-agent config and prompts",
-            },
-            {
-                "name": "suggestions",
-                "description": "Generate follow-up question suggestions for conversations",
-            },
-            {
-                "name": "channels",
-                "description": "Manage IM channel integrations (Feishu, Slack, Telegram)",
-            },
-            {
-                "name": "health",
-                "description": "Health check and system status endpoints",
-            },
+            {"name": "models", "description": "Operations for querying available AI models and their configurations"},
+            {"name": "mcp", "description": "Manage Model Context Protocol (MCP) server configurations"},
+            {"name": "memory", "description": "Access and manage global memory data for personalized conversations"},
+            {"name": "skills", "description": "Manage skills and their configurations"},
+            {"name": "artifacts", "description": "Access and download thread artifacts and generated files"},
+            {"name": "uploads", "description": "Upload and manage user files for threads"},
+            {"name": "agents", "description": "Create and manage custom agents with per-agent config and prompts"},
+            {"name": "suggestions", "description": "Generate follow-up question suggestions for conversations"},
+            {"name": "channels", "description": "Manage IM channel integrations (Feishu, Slack, Telegram)"},
+            {"name": "health", "description": "Health check and system status endpoints"},
         ],
     )
 
-    # CORS is handled by nginx - no need for FastAPI middleware
+    # CORS middleware for Railway deployment (no nginx)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     # Include routers
-    # Models API is mounted at /api/models
     app.include_router(models.router)
-
-    # MCP API is mounted at /api/mcp
     app.include_router(mcp.router)
-
-    # Memory API is mounted at /api/memory
     app.include_router(memory.router)
-
-    # Skills API is mounted at /api/skills
     app.include_router(skills.router)
-
-    # Artifacts API is mounted at /api/threads/{thread_id}/artifacts
     app.include_router(artifacts.router)
-
-    # Uploads API is mounted at /api/threads/{thread_id}/uploads
     app.include_router(uploads.router)
-
-    # Agents API is mounted at /api/agents
     app.include_router(agents.router)
-
-    # Suggestions API is mounted at /api/threads/{thread_id}/suggestions
     app.include_router(suggestions.router)
-
-    # Channels API is mounted at /api/channels
     app.include_router(channels.router)
 
     @app.get("/health", tags=["health"])
     async def health_check() -> dict:
-        """Health check endpoint.
-
-        Returns:
-            Service health status information.
-        """
+        """Health check endpoint."""
         return {"status": "healthy", "service": "deer-flow-gateway"}
+
+    # ---- LangGraph Proxy Routes ----
+    @app.api_route("/runs", methods=["GET", "POST", "PUT", "DELETE"], tags=["langgraph"])
+    @app.api_route("/runs/{path:path}", methods=["GET", "POST", "PUT", "DELETE"], tags=["langgraph"])
+    async def proxy_runs(request: Request, path: str = ""):
+        return await _proxy_to_langgraph(request)
+
+    @app.api_route("/threads", methods=["GET", "POST", "PUT", "DELETE"], tags=["langgraph"])
+    @app.api_route("/threads/{path:path}", methods=["GET", "POST", "PUT", "DELETE"], tags=["langgraph"])
+    async def proxy_threads(request: Request, path: str = ""):
+        return await _proxy_to_langgraph(request)
+
+    async def _proxy_to_langgraph(request: Request):
+        """Proxy request to LangGraph server on localhost:2024."""
+        url = f"{LANGGRAPH_URL}{request.url.path}"
+        if request.url.query:
+            url = f"{url}?{request.url.query}"
+        headers = {
+            k: v for k, v in request.headers.items()
+            if k.lower() not in ("host", "transfer-encoding", "connection")
+        }
+        body = await request.body()
+        is_stream = "/stream" in request.url.path
+
+        if is_stream:
+            client = httpx.AsyncClient(timeout=None)
+            try:
+                req = client.build_request(
+                    method=request.method, url=url, headers=headers, content=body
+                )
+                resp = await client.send(req, stream=True)
+
+                async def stream_response():
+                    try:
+                        async for chunk in resp.aiter_bytes():
+                            yield chunk
+                    finally:
+                        await resp.aclose()
+                        await client.aclose()
+
+                return StreamingResponse(
+                    stream_response(),
+                    status_code=resp.status_code,
+                    headers={
+                        k: v for k, v in resp.headers.items()
+                        if k.lower() not in ("transfer-encoding", "connection")
+                    },
+                    media_type=resp.headers.get("content-type", "text/event-stream"),
+                )
+            except Exception:
+                await client.aclose()
+                raise
+        else:
+            async with httpx.AsyncClient(timeout=300.0) as client:
+                resp = await client.request(
+                    method=request.method, url=url, headers=headers, content=body
+                )
+                return Response(
+                    content=resp.content,
+                    status_code=resp.status_code,
+                    headers={
+                        k: v for k, v in resp.headers.items()
+                        if k.lower() not in ("transfer-encoding", "connection")
+                    },
+                )
 
     return app
 
