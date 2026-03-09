@@ -1,0 +1,38 @@
+# DeerFlow Configuration for Empire
+# Uses Anthropic Claude as the LLM provider
+
+models:
+  - name: claude-sonnet
+    display_name: Claude Sonnet
+    use: langchain_anthropic:ChatAnthropic
+    model: claude-sonnet-4-6
+    api_key: $ANTHROPIC_API_KEY
+    max_tokens: 8192
+    supports_vision: true
+    when_thinking_enabled:
+      extra_body:
+        thinking:
+          type: enabled
+
+# Tool Groups Configuration
+tool_groups:
+  - name: web
+  - name: file:read
+  - name: file:write
+  - name: bash
+
+# Tools Configuration
+tools:
+  web:
+    - name: web_search
+      description: Search the web using Tavily
+    - name: crawl_web
+      description: Crawl and extract content from web pages
+
+# Default LLM settings
+default_model: claude-sonnet
+
+# Search Configuration
+search:
+  provider: tavily
+  api_key: $TAVILY_API_KEY
