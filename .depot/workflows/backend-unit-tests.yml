@@ -38,4 +38,7 @@ jobs:
 
       - name: Run unit tests of backend
         working-directory: backend
+        # Config parsing needs a value; unit tests mock provider calls. Never use a live API key.
+        env:
+          ANTHROPIC_API_KEY: depot-unit-test-placeholder-not-a-real-key
         run: make test
