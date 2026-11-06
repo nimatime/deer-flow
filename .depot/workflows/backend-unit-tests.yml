@@ -1,6 +1,8 @@
+# Native Depot CI. GitHub Actions is disabled for this repository.
 name: Unit Tests
 
 on:
+  workflow_dispatch:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
 
@@ -10,8 +12,8 @@ concurrency:
 
 jobs:
   backend-unit-tests:
-    if: github.event.pull_request.draft == false
-    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: depot-ubuntu-24.04
     timeout-minutes: 15
 
     steps:
